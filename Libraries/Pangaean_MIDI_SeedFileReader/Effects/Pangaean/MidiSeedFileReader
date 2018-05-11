@@ -1,0 +1,368 @@
+// This effect Copyright (C)
+// Design: Pangaean Permafaction
+// Code: Nettles
+// License: GPL - http://www.gnu.org/licenses/gpl.html
+
+// declare name to be displayed in JS FX list:
+desc: MIDI Seed FileReader
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// UI declarations:
+
+// File drop downs are auto-loaded with file lists as found in Reaper\DATA\...
+// In this case, "Reaper\DATA\HomeCooked"
+// Default selection = "none"
+slider1:/Pangaean:none:Note
+slider2:/Pangaean:none:Velocity
+slider3:/Pangaean:none:Duration
+
+// Tempo slider range 0.1 --> 4 / Default = 1
+slider4:1<0.1,4>Rate (from Tempo)
+
+slider5:0<0,1,1{Legato ON,Legato OFF}>Note Transition
+slider6:0<0,1,1{Sustain,Repeat}>Action
+
+slider7:0<0,5,1{Run/Stop on Play,Run/Stop/Rewind on Play,Rewind All,Run Non-stop,Stop All}>Reader
+
+slider8:0<0,1,1{Control Send Off,Note/Velocity/Duration as GP_Slider_1/2/3}>Control Send
+
+slider9:0<0,1,1{Numeric,Single Character}>Note Parsing
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// This runs before anything else happens:
+@init 
+ext_noinit=1;
+lslider1=-1;lslider2=-1;lslider3=-1; // flag the sliders as untouched/unitialised
+impbuf_l1;impbuf_l2;impbuf_l3; // global var's to hold file length 
+impbuf_p1;impbuf_p2;impbuf_p3; // global var's to hold file posn
+ 
+ filehandle1; filehandle2; filehandle3; // global var's for the file 'handles'
+lp=0; running=0;// 'static' fractional loop counter, reaching '1' means time to check notes
+div; // 'static' tempo divisor, for calculating fractional loop increment
+ #msg;#str;#RDstr;#CPstr;
+ #Vstr;#Dstr;#Nstr;
+ 
+ memset(status,-1,128); // 128 global 'slots' to hold note-on/off duration countdown
+ 
+  // Global function needs to be declared in @init so all other blocks can see it! 
+  ////////////////////////
+ function Get3Digit(filehandle,str)
+     (
+     strcpy(#RDstr,str);
+      bgnstr=-1;cutstr=0;runstr=0;
+     
+     brk=0;i=0;while(
+          ((str_getchar(#RDstr,i,'cu')>47)?
+            (bgnstr=i;brk=1;));
+          i+=1;
+          ( (i<strlen(#RDstr)) && (brk==0) );
+              );
+          
+       ((bgnstr<0)||(str_getchar(#RDstr,bgnstr,'cu')==123))?
+        (file_string(filehandle,#RDstr);bgnstr=0);
+      
+     brk=0;i=bgnstr;while(
+            ((str_getchar(#RDstr,i,'cu')<48)?
+              (cutstr=i;brk=1;));
+            i+=1;
+            ( (i<strlen(#RDstr)) && (brk==0) );
+              );
+     
+     (cutstr==bgnstr)?cutstr=strlen(#RDstr);
+     runstr=cutstr-bgnstr;
+     strcpy_substr(#str, #RDstr, bgnstr, runstr); 
+          
+      strcat(#msg, "Parsing: ");
+       strcat(#msg, #RDstr);
+       strcat(#msg, "  -->  ");
+       strcat(#msg, #str);
+            
+     runstr=strlen(#RDstr)-bgnstr;
+     strcpy_substr(#CPstr, #RDstr, cutstr+1, runstr); 
+     strcpy(str, #CPstr);
+     
+        
+      val1 = (str_getchar(#str,-1,'cu')-48 ) ; // from righthand end 
+      val2 = (str_getchar(#str,-2,'cu' )-48) ; // collect 3x ASCII chars from right to left
+      val3 = (str_getchar(#str,-3,'cu')-48 ) ; // subtracting 48 to make them 'single digit integers'
+      
+       clc = ( val1>0?val1:0); // then try to make them into a number!
+       clc += (val2>0?val2*10:0);
+       clc   += ( val3>0?val3*100:0);
+
+       // or return '-1' to warn calling code if it seems junk...       
+       clc=((val1<0)&&(val2<0)&&(val3<0))?-1:clc%128; 
+       
+       sprintf(#str,"%i",clc);
+       strcat(#msg, "  =  ");
+             strcat(#msg, #str);
+             strcat(#msg, "\r\n\r\n"); 
+       clc;
+     );
+  ////////////////////////
+ function Get1Digit(filehandle,str)
+     (
+  strcpy(#RDstr,str);
+   bgnstr=-1;cutstr=0;runstr=0;
+  
+  brk=0;i=0;while( // skip quick through any surplus whitespace
+       ((str_getchar(#RDstr,i,'cu')>47)?
+         (bgnstr=i;brk=1;));
+       i+=1;
+       ( (i<strlen(#RDstr)) && (brk==0) );
+           );
+       
+    ((bgnstr<0)||(str_getchar(#RDstr,bgnstr,'cu')==123))? // get new line if we ran out or hit a comment (=123)
+     (file_string(filehandle,#RDstr);bgnstr=0);
+   
+ // brk=0;i=bgnstr;while(
+   //      ((str_getchar(#RDstr,i,'cu')<48)?
+     //      (cutstr=i;brk=1;));
+       //  i+=1;
+         //( (i<strlen(#RDstr)) && (brk==0) );
+       //  ( (i<(bgnstr+1)) && (brk==0) );
+         //  );
+         cutstr=bgnstr+1;
+  
+  //(cutstr==bgnstr)?cutstr=strlen(#RDstr);
+  
+  runstr=cutstr-bgnstr;
+  strcpy_substr(#str, #RDstr, bgnstr, runstr); 
+       
+   strcat(#msg, "Parsing: ");
+    strcat(#msg, #RDstr);
+    strcat(#msg, "  -->  ");
+    strcat(#msg, #str);
+         
+  runstr=strlen(#RDstr)-bgnstr;
+  strcpy_substr(#CPstr, #RDstr, cutstr, runstr); 
+  strcpy(str, #CPstr);
+  
+     
+   val1 = (str_getchar(#str,-1,'cu')-48 ) ; // from righthand end 
+   
+    clc = ( val1>0?val1:0); // then try to make a number!
+    
+    // or return '-1' to warn calling code if it seems junk...       
+    clc=(val1<0)?-1:clc%128; 
+    
+    sprintf(#str,"%i",clc);
+    strcat(#msg, "  =  ");
+          strcat(#msg, #str);
+          strcat(#msg, "\r\n\r\n"); 
+    clc;
+     );
+  ////////////////////////     
+ function Rewind()  (
+impbuf_p1=0;file_rewind(filehandle1);
+impbuf_p2=0;file_rewind(filehandle2);
+impbuf_p3=0;file_rewind(filehandle3);
+#Dstr="";#Vstr="";#Nstr="";
+                          );
+  ////////////////////////
+ function AllNotesOff()  (
+ i=0;
+  loop(128, // loop through all possible notes, whether 'playing' or not
+ status[i]>-1?( // if note is currently playing:
+      midisend(10, $x80, i, 0); // sending note off
+   );
+   i+=1; ); 
+  );
+ ////////////////////////  
+ function HeldNotesOff()  (
+ i=0;
+ strcat(#msg,"\r\n\r\nNote_OFF: ");
+ 
+ loop(128, // loop through all possible notes, whether 'playing' or not
+ status[i]>-1?( // if note is currently playing:
+   status[i]-=1; // countdown note, through zero
+   status[i]==-1?(
+     midisend(10, $x80, i, 0); // sending note off when count runs out
+        sprintf(#str,"%i",i);
+         strcat(#msg,#str);
+       strcat(#msg,"  ");
+             ):((slider6==1)?(midisend(10, $x80, i, 0);midisend(10, $x90, i, vel);););
+   );
+   i+=1; ); 
+  );
+ ////////////////////////
+ 
+ 
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// Handler for UI interaction:  
+@slider
+
+  div = slider4; // simply grab tempo divisor
+
+  // following code duplicated to get 3x working file handles (if possible!)
+  tmp=slider1|0;
+  tmp != lslider1 ? // is current slider setting changed since last time was checked?
+  (
+    lslider1=tmp; 
+    filehandle1 > 0 ?  file_close(filehandle1); // close old file if we had one
+    filehandle1=file_open(slider1); // try opening the new one
+        filehandle1 > 0 ? 
+    (
+      istext=file_text(filehandle1); // if it opened OK, check if it looks like text
+      istext ?
+      (
+        impbuf_l1=(file_avail(filehandle1))|0;  // capture the length, to prove file is alive
+        Rewind();
+      ) :      file_close(filehandle1); // if any checks failed, just close the file!
+    );
+  );
+
+  tmp=slider2|0;
+  tmp != lslider2 ?
+  (
+    lslider2=tmp;  
+    filehandle2 > 0 ?  file_close(filehandle2);
+    filehandle2=file_open(slider2);
+        filehandle2 > 0 ? 
+    (
+      istext=file_text(filehandle2);
+      istext ?
+      (
+        impbuf_l2=(file_avail(filehandle2))|0;  
+        Rewind();
+      ) :      file_close(filehandle2);
+    );
+  );
+  
+  tmp=slider3|0;
+  tmp != lslider3 ?
+  (
+    lslider3=tmp;
+    filehandle3 > 0 ?  file_close(filehandle3);
+    filehandle3=file_open(slider3);
+        filehandle3 > 0 ? 
+    (
+      istext=file_text(filehandle3);
+      istext ?
+      (
+        impbuf_l3=(file_avail(filehandle3))|0;  
+        Rewind();
+      ) :      file_close(filehandle3);
+    );
+  );
+  
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// Code called once prior every DSP sample buffer:
+// ie: rapid period beyond our control, locked to sound hardware & audio sample settings
+// this is way too fast for our MIDI!
+@block
+        (
+((play_state==1)||(slider7==3))
+        &&(slider7!=4)
+        )?(
+///////////////////////Track is PLAYING: otherwise do nothing
+
+running=1;
+inc = samplesblock/srate // how many sec is this block?
+        *(tempo/60)       // how many beats is this block?
+        /div/2;
+        
+lp+=inc;
+
+lp>=1?( // Only proceed with note processing once loop counter trips, dividing sample speed down to MIDI note tempo
+    lp=0;
+
+impbuf_p1=file_avail(filehandle1);
+impbuf_p2=file_avail(filehandle2);
+impbuf_p3=file_avail(filehandle3);
+
+strcpy(#msg, "Reader:");
+    (slider5==1)?HeldNotesOff();
+    (slider7==2)?Rewind();
+
+  // following code roughly duplicated to try 3x working file handles:
+!file_avail(filehandle3) ? file_rewind(filehandle3);  
+file_avail(filehandle3) ?
+  (  strcat(#msg,"\r\n\r\nDuration: ");
+     num=Get3Digit(filehandle3,#Dstr) ;
+     num>=0?(
+     dur=num;  
+          )  : (dur=0;);             
+    )    : dur=1;
+    
+!file_avail(filehandle2) ? file_rewind(filehandle2);  
+file_avail(filehandle2) ?
+  (  strcat(#msg,"Velocity: ");
+     num=Get3Digit(filehandle2,#Vstr); 
+     num>=0?(
+     vel=num; 
+          )    : (dur=80;);          
+    )    : vel=127;
+  
+!file_avail(filehandle1) ? file_rewind(filehandle1);  // check if handle seems dead, if so, simply attempt rewind
+file_avail(filehandle1) ? // and if handle now not dead = OK to proceed
+  (  strcat(#msg,"Note: ");
+     num=(slider9==0)?Get3Digit(filehandle1,#Nstr):Get1Digit(filehandle1,#Nstr); // try to read a 3 digit int
+     num>=0?(
+       
+      midisend(0, $x90, num, vel); // if we got one, play the desired note
+      status[num]=dur; // then store the required duration countdown
+      (slider8==1)?(
+                  midisend(0, $xB0, 16, num);
+                  midisend(0, $xB0, 17, vel);
+                  midisend(0, $xB0, 18, dur);
+                    );
+      (slider5==1)?status[num]-=1;
+      strcat(#msg,"Note_ON: ");
+            sprintf(#str,"%i",num);
+      strcat(#msg,#str);
+      strcat(#msg," , ");
+            sprintf(#str,"%i",vel);
+      strcat(#msg,#str);    
+      strcat(#msg," (Dur:");
+              sprintf(#str,"%i",dur);
+        strcat(#msg,#str);           strcat(#msg,")");  
+          ) :( strcat(#msg,"REST"); )  ;            
+    )   ; 
+    
+    (slider5==0)?HeldNotesOff();
+    
+    );
+    ):(
+          (slider7!=3)?AllNotesOff();
+          (running==1)?(  running=0; (slider7==1)?Rewind();  );
+          );
+    
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// Code called once to process every DSP sample buffer
+// Not our problem! (Unless MIDI & audio streams should interact somehow) 
+@sample
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+@gfx
+gfx_w = 200; gfx_h = 400; 
+gfx_b = 0.6;
+(impbuf_p1==0)?
+  (gfx_r = 1; gfx_g = 0.3;):(gfx_r = 0.3; gfx_g = 1;  );
+gfx_rect(12,8,96,16); 
+(impbuf_p2==0)?
+  (gfx_r = 1; gfx_g = 0.3;):(gfx_r = 0.3; gfx_g = 1;  );
+gfx_rect(112,8,96,16);
+(impbuf_p3==0)?
+  (gfx_r = 1; gfx_g = 0.3;):(gfx_r = 0.3; gfx_g = 1;  );
+gfx_rect(212,8,96,16);
+
+gfx_r = 0.6; gfx_g = 0.4; gfx_b = 1;
+
+gfx_x = 20; gfx_y = 12;
+gfx_drawstr("Note");
+gfx_x = 120; gfx_y = 12;
+gfx_drawstr("Velocity");
+gfx_x = 220; gfx_y = 12;
+gfx_drawstr("Duration");
+
+gfx_x = 12;
+gfx_y = 32;
+gfx_printf(#msg);
+

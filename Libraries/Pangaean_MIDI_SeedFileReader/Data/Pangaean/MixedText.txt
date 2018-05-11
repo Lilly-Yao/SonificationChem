@@ -1,0 +1,7 @@
+cat,dog,bird
+fish
+
+
+3098
+97142
+{ a line like this will be parsed as note values!
